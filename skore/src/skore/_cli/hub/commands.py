@@ -77,15 +77,18 @@ def generate(
     force: bool,
 ) -> None:
     """Mint a workspace-scoped Hub API key and store it locally."""
-    host = apply_hub_uri(host, discover=True)
+    raw_host = host
+    resolved_host = apply_hub_uri(host, discover=True)
+    aliases = [raw_host] if raw_host.rstrip("/") != resolved_host.rstrip("/") else None
     try:
         mint_api_key(
-            host=host,
+            host=resolved_host,
             workspace=workspace,
             name=name,
             expires=expires,
             timeout=login_timeout,
             force=force,
+            aliases=aliases,
         )
     except HubError as error:
         raise click.ClickException(str(error)) from error

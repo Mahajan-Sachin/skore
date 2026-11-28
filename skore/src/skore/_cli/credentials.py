@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from skore._cli.skore import apply_hub_uri
 
@@ -29,6 +29,7 @@ def mint_api_key(
     expires: str,
     timeout: int,
     force: bool,
+    aliases: list[str] | None = None,
 ) -> None:
     """Mint a workspace API key and store it in the local registry.
 
@@ -38,15 +39,18 @@ def mint_api_key(
     hub_key = _hub_key()
     if host:
         host = apply_hub_uri(host)
+    kwargs: dict[str, Any] = {
+        "host": host,
+        "workspace": workspace,
+        "name": name,
+        "expires": expires,
+        "timeout": timeout,
+        "force": force,
+    }
+    if aliases:
+        kwargs["aliases"] = aliases
     try:
-        hub_key.generate(
-            host=host,
-            workspace=workspace,
-            name=name,
-            expires=expires,
-            timeout=timeout,
-            force=force,
-        )
+        hub_key.generate(**kwargs)
     except hub_key.KeyExistsError as error:
         raise HubError(
             f"an API key for workspace '{workspace}' is already stored; "
@@ -62,7 +66,11 @@ def stored_api_key(*, host: str | None, workspace: str) -> str | None:
 
 
 def require_workspace_api_key(
-    *, host: str, workspace: str, login_timeout: int
+    *,
+    host: str,
+    workspace: str,
+    login_timeout: int,
+    aliases: list[str] | None = None,
 ) -> tuple[str, bool]:
     """Return the workspace API key, minting one when none is stored.
 
@@ -75,6 +83,9 @@ def require_workspace_api_key(
     """
     existing = stored_api_key(host=host, workspace=workspace)
     if existing:
+        if aliases:
+            for alias in aliases:
+                _hub_key().add_alias(host=host, workspace=workspace, alias=alias)
         return existing, False
 
     mint_api_key(
@@ -84,6 +95,7 @@ def require_workspace_api_key(
         expires="never",
         timeout=login_timeout,
         force=False,
+        aliases=aliases,
     )
     minted = stored_api_key(host=host, workspace=workspace)
     if not minted:

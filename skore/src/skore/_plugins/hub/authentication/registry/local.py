@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import wraps
 from json import dump, load
 from pathlib import Path
@@ -84,6 +84,7 @@ class Key:
     host: str
     workspace: str
     key: str | None = None
+    aliases: list[str] = field(default_factory=list)
 
 
 def lock(function: Callable[P, R]) -> Callable[P, R]:
@@ -161,7 +162,14 @@ def keys() -> Generator[tuple[int, str, str]]:
 
 
 @lock
-def set(*, id: int, host: str, workspace: str, key: str) -> None:
+def set(
+    *,
+    id: int,
+    host: str,
+    workspace: str,
+    key: str,
+    aliases: list[str] | None = None,
+) -> None:
     """
     Insert or replace the API key for ``host`` and ``workspace``.
 
@@ -175,6 +183,8 @@ def set(*, id: int, host: str, workspace: str, key: str) -> None:
         Workspace associated with the API key.
     key : str
         API key to persist.
+    aliases : list of str, optional
+        Alternative URIs (such as frontend hosts) associated with the API key.
     """
     filepath = setup()
 
@@ -182,7 +192,14 @@ def set(*, id: int, host: str, workspace: str, key: str) -> None:
         registry = load(file)
 
     host = normalize(host)
-    new = Key(id=id, host=host, workspace=workspace)
+    normalized_aliases: list[str] = []
+    if aliases:
+        for alias in aliases:
+            norm_alias = normalize(alias)
+            if norm_alias != host and norm_alias not in normalized_aliases:
+                normalized_aliases.append(norm_alias)
+
+    new = Key(id=id, host=host, workspace=workspace, aliases=normalized_aliases)
 
     if registry["type"] == "secret":
         # macOS binds a keychain item to the executable that created it. After
@@ -202,18 +219,80 @@ def set(*, id: int, host: str, workspace: str, key: str) -> None:
 
     for i, entry in enumerate(registry["keys"]):
         i_key = Key(**entry)
+        entry_host = normalize(i_key.host)
+        entry_aliases = [normalize(a) for a in i_key.aliases]
 
-        if (normalize(i_key.host) == host) and (i_key.workspace == workspace):
-            registry["keys"][i] = asdict(new)
+        if (entry_host == host or host in entry_aliases) and (
+            i_key.workspace == workspace
+        ):
+            # Preserve existing aliases
+            for a in entry_aliases:
+                if a != host and a not in new.aliases:
+                    new.aliases.append(a)
+            new_dict = asdict(new)
+            if not new.aliases:
+                del new_dict["aliases"]
+            registry["keys"][i] = new_dict
             break
     else:
-        registry["keys"].append(asdict(new))
+        new_dict = asdict(new)
+        if not new.aliases:
+            del new_dict["aliases"]
+        registry["keys"].append(new_dict)
 
     save_on_disk(
         registry=registry,
         filepath=filepath,
         mode=S_IMODE(filepath.stat().st_mode),
     )
+
+
+@lock
+def add_alias(*, host: str, workspace: str, alias: str) -> None:
+    """
+    Associate an alias with an existing API key for ``host`` and ``workspace``.
+
+    Parameters
+    ----------
+    host : str
+        URI associated with the API key.
+    workspace : str
+        Workspace associated with the API key.
+    alias : str
+        Alternative URI to associate with the key.
+    """
+    filepath = setup()
+
+    with filepath.open() as file:
+        registry = load(file)
+
+    host = normalize(host)
+    norm_alias = normalize(alias)
+    if host == norm_alias:
+        return
+
+    updated = False
+    for i, entry in enumerate(registry["keys"]):
+        key = Key(**entry)
+        key_host = normalize(key.host)
+        key_aliases = [normalize(a) for a in key.aliases]
+
+        if (key_host == host or host in key_aliases) and (key.workspace == workspace):
+            if norm_alias not in key_aliases:
+                key.aliases.append(norm_alias)
+                new_dict = asdict(key)
+                if registry["type"] == "secret":
+                    new_dict["key"] = None
+                registry["keys"][i] = new_dict
+                updated = True
+            break
+
+    if updated:
+        save_on_disk(
+            registry=registry,
+            filepath=filepath,
+            mode=S_IMODE(filepath.stat().st_mode),
+        )
 
 
 def get(*, host: str, workspace: str) -> Key | None:
@@ -241,10 +320,12 @@ def get(*, host: str, workspace: str) -> Key | None:
 
     for entry in registry["keys"]:
         key = Key(**entry)
+        key_host = normalize(key.host)
+        key_aliases = [normalize(a) for a in key.aliases]
 
-        if (normalize(key.host) == host) and (key.workspace == workspace):
+        if (key_host == host or host in key_aliases) and (key.workspace == workspace):
             if registry["type"] == "secret":
-                key.key = get_password(KEYRING_SERVICE, f"{host}:{workspace}")
+                key.key = get_password(KEYRING_SERVICE, f"{key_host}:{workspace}")
 
             return key
 
@@ -270,6 +351,15 @@ def delete(*, host: str, workspace: str) -> None:
 
     host = normalize(host)
 
+    target_host = host
+    for entry in registry["keys"]:
+        key = Key(**entry)
+        key_host = normalize(key.host)
+        key_aliases = [normalize(a) for a in key.aliases]
+        if (key_host == host or host in key_aliases) and (key.workspace == workspace):
+            target_host = key_host
+            break
+
     if registry["type"] == "secret":
         with suppress(PasswordDeleteError):
             # macOS binds a keychain item to the executable that created it. After
@@ -282,13 +372,14 @@ def delete(*, host: str, workspace: str) -> None:
                     'Choose "Always Allow" to grant it to this Python executable.'
                 )
 
-            get_password(KEYRING_SERVICE, f"{host}:{workspace}")
-            delete_password(KEYRING_SERVICE, f"{host}:{workspace}")
+            get_password(KEYRING_SERVICE, f"{target_host}:{workspace}")
+            delete_password(KEYRING_SERVICE, f"{target_host}:{workspace}")
 
     registry["keys"] = [
         entry
         for entry in registry["keys"]
-        if (normalize(entry["host"]) != host) or (entry["workspace"] != workspace)
+        if (normalize(entry["host"]) != target_host)
+        or (entry["workspace"] != workspace)
     ]
 
     save_on_disk(
@@ -296,3 +387,23 @@ def delete(*, host: str, workspace: str) -> None:
         filepath=filepath,
         mode=S_IMODE(filepath.stat().st_mode),
     )
+
+
+def is_same_host(host1: str, host2: str) -> bool:
+    """Return whether ``host1`` and ``host2`` refer to the same Hub host."""
+    norm1 = normalize(host1)
+    norm2 = normalize(host2)
+    if norm1 == norm2:
+        return True
+
+    filepath = setup()
+    with filepath.open() as file:
+        registry = load(file)
+
+    for entry in registry.get("keys", []):
+        key = Key(**entry)
+        all_hosts = {normalize(key.host), *(normalize(a) for a in key.aliases)}
+        if norm1 in all_hosts and norm2 in all_hosts:
+            return True
+
+    return False

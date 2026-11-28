@@ -84,13 +84,24 @@ def _pick_harness(workspace: Path) -> str:
     return app.result
 
 
-def _api_key_for(config: SkoreConfig, *, login_timeout: int) -> str:
+def _api_key_for(
+    config: SkoreConfig,
+    *,
+    login_timeout: int,
+    host_alias: str | None = None,
+) -> str:
     """Return the workspace API key, minting one when none is stored."""
+    aliases = (
+        [host_alias]
+        if host_alias and host_alias.rstrip("/") != config.hub_url.rstrip("/")
+        else None
+    )
     try:
         api_key, minted = require_workspace_api_key(
             host=config.hub_url,
             workspace=config.workspace,
             login_timeout=login_timeout,
+            aliases=aliases,
         )
     except HubError as error:
         raise click.ClickException(str(error)) from error
@@ -104,7 +115,20 @@ def _api_key_for(config: SkoreConfig, *, login_timeout: int) -> str:
 
 def _matches_saved_host(saved_host: str, host: str | None) -> bool:
     """Return whether ``host`` names the already resolved ``saved_host``."""
-    return host is None or host.rstrip("/") == saved_host.rstrip("/")
+    if host is None:
+        return True
+    if host.rstrip("/") == saved_host.rstrip("/"):
+        return True
+
+    from skore._plugins.hub.authentication.registry import local
+
+    if local.is_same_host(saved_host, host):
+        return True
+
+    from skore._cli.skore import _discover_api_url
+
+    discovered = _discover_api_url(host)
+    return bool(discovered and discovered.rstrip("/") == saved_host.rstrip("/"))
 
 
 def _resolve_membership(memberships: list[Workspace]) -> Workspace:
@@ -246,7 +270,7 @@ def agent(
         ensure_gitignore_entry(project)
         console.print(f"[skore.ok]+[/] saved [skore.path]{config_path}[/]")
 
-    api_key = _api_key_for(config, login_timeout=login_timeout)
+    api_key = _api_key_for(config, login_timeout=login_timeout, host_alias=host)
 
     if harness_name is None:
         if is_non_interactive():

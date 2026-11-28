@@ -1290,3 +1290,66 @@ def test_agent_leaves_harness_abort_uncaught_as_click_exception(tmp_path, monkey
     assert result.exit_code == 1
     assert "Aborted." in result.output
     assert "Traceback" not in result.output
+
+
+def test_matches_saved_host(monkeypatch):
+    assert _commands._matches_saved_host("http://api.test", None)
+    assert _commands._matches_saved_host("http://api.test", "http://api.test/")
+    assert not _commands._matches_saved_host("http://api.test", "http://other.test")
+
+    # Matched via local registry alias
+    monkeypatch.setattr(
+        "skore._plugins.hub.authentication.registry.local.is_same_host",
+        lambda saved, host: host == "http://frontend.test",
+    )
+    assert _commands._matches_saved_host("http://api.test", "http://frontend.test")
+
+    # Matched via frontend discovery
+    monkeypatch.setattr(
+        "skore._plugins.hub.authentication.registry.local.is_same_host",
+        lambda saved, host: False,
+    )
+    monkeypatch.setattr(
+        "skore._cli.skore._discover_api_url",
+        lambda host: "http://api.test" if host == "http://discovered.test" else None,
+    )
+    assert _commands._matches_saved_host("http://api.test", "http://discovered.test")
+    assert not _commands._matches_saved_host("http://api.test", "http://unknown.test")
+
+
+def test_agent_reuses_saved_config_with_frontend_alias(tmp_path, monkeypatch):
+    """Passing a frontend host that aliases saved hub_url does not trigger re-login."""
+    _write_skore(tmp_path, hub_url="http://api.test", workspace="ws-1")
+    _mock_harness_on_path(monkeypatch, "opencode")
+    launched = []
+    monkeypatch.setattr(
+        _commands,
+        "launch_harness",
+        lambda selected, workspace, model_id=DEFAULT_MODEL_ID, **k: launched.append(
+            selected.harness_name
+        ),
+    )
+    # Stub alias in local registry
+    monkeypatch.setattr(
+        "skore._plugins.hub.authentication.registry.local.is_same_host",
+        lambda saved, host: (
+            saved == "http://api.test" and host == "http://frontend.test"
+        ),
+    )
+
+    # Ensure workspace_memberships is NOT called
+    def _fail_memberships(*args, **kwargs):
+        raise AssertionError("workspace_memberships should not be called")
+
+    monkeypatch.setattr(_commands, "workspace_memberships", _fail_memberships)
+
+    result = CliRunner().invoke(
+        agent,
+        [str(tmp_path), "--host", "http://frontend.test", "--harness", "opencode"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert launched == ["opencode"]
+    saved = json.loads((tmp_path / SKORE_FILENAME).read_text())
+    assert saved["hub_url"] == "http://api.test"
+    assert saved["workspace"] == "ws-1"

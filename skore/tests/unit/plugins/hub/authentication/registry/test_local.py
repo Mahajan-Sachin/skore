@@ -246,6 +246,93 @@ class TestPlaintext:
             ],
         }
 
+    def test_set_and_get_with_aliases(self):
+        local.set(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example/", "https://portal.example"],
+        )
+
+        assert content() == {
+            "type": "plaintext",
+            "keys": [
+                {
+                    "id": 1,
+                    "host": "https://api.example",
+                    "workspace": "w1",
+                    "key": "k1",
+                    "aliases": [
+                        "https://frontend.example",
+                        "https://portal.example",
+                    ],
+                }
+            ],
+        }
+
+        assert local.get(host="https://api.example", workspace="w1") == Key(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example", "https://portal.example"],
+        )
+        assert local.get(host="https://frontend.example", workspace="w1") == Key(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example", "https://portal.example"],
+        )
+        assert local.get(host="https://portal.example/", workspace="w1") == Key(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example", "https://portal.example"],
+        )
+
+    def test_delete_via_alias(self):
+        local.set(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example"],
+        )
+        local.delete(host="https://frontend.example", workspace="w1")
+
+        assert content() == {"type": "plaintext", "keys": []}
+
+    def test_add_alias(self):
+        local.set(id=1, host="https://api.example", workspace="w1", key="k1")
+        local.add_alias(
+            host="https://api.example", workspace="w1", alias="https://frontend.example"
+        )
+
+        assert local.get(host="https://frontend.example", workspace="w1") == Key(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example"],
+        )
+
+    def test_is_same_host(self):
+        local.set(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example"],
+        )
+
+        assert local.is_same_host("https://api.example", "https://frontend.example")
+        assert local.is_same_host("https://frontend.example", "https://api.example")
+        assert local.is_same_host("https://api.example/", "https://api.example")
+        assert not local.is_same_host("https://api.example", "https://other.example")
+
 
 @mark.usefixtures("secret_keyring")
 class TestSecret:
@@ -361,3 +448,49 @@ class TestSecret:
         local.delete(host="https://a.example", workspace="w1")
 
         assert content() == {"type": "secret", "keys": []}
+
+    def test_set_and_get_with_aliases_in_secret_keyring(self, secret_keyring):
+        local.set(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example"],
+        )
+
+        assert content() == {
+            "type": "secret",
+            "keys": [
+                {
+                    "id": 1,
+                    "host": "https://api.example",
+                    "workspace": "w1",
+                    "key": None,
+                    "aliases": ["https://frontend.example"],
+                }
+            ],
+        }
+        assert secret_keyring[("skore", "https://api.example:w1")] == "k1"
+
+        assert local.get(host="https://frontend.example", workspace="w1") == Key(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example"],
+        )
+
+    def test_delete_via_alias_removes_from_secret_keyring(self, secret_keyring):
+        local.set(
+            id=1,
+            host="https://api.example",
+            workspace="w1",
+            key="k1",
+            aliases=["https://frontend.example"],
+        )
+        assert ("skore", "https://api.example:w1") in secret_keyring
+
+        local.delete(host="https://frontend.example", workspace="w1")
+
+        assert content() == {"type": "secret", "keys": []}
+        assert ("skore", "https://api.example:w1") not in secret_keyring

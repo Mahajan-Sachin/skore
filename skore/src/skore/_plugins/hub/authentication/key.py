@@ -27,6 +27,7 @@ def generate(
     expires: Literal["1", "3", "6", "never"] = "never",
     timeout: int = 600,
     force: bool = False,
+    aliases: list[str] | None = None,
 ) -> None:
     """
     Generate an API key on the hub and store it in the local registry.
@@ -45,6 +46,8 @@ def generate(
         Seconds to wait for interactive authentication.
     force : bool, default=False
         Replace an existing key for the same host and workspace.
+    aliases : list of str, optional
+        Alternative URIs (such as frontend hosts) associated with the API key.
 
     Raises
     ------
@@ -57,6 +60,7 @@ def generate(
     """
     assert host is not None
 
+    existing_aliases: list[str] = []
     if old := registry.local.get(host=host, workspace=workspace):
         if not force:
             raise KeyExistsError(
@@ -64,6 +68,7 @@ def generate(
                 "exists; use force option to overwrite it."
             )
 
+        existing_aliases = old.aliases
         registry.local.delete(host=host, workspace=workspace)
         registry.distant.revoke(host=host, id=old.id, timeout=timeout)
 
@@ -75,7 +80,32 @@ def generate(
         timeout=timeout,
     )
 
-    registry.local.set(id=new.id, host=host, workspace=workspace, key=new.key)
+    combined_aliases = list(dict.fromkeys((aliases or []) + existing_aliases))
+    registry.local.set(
+        id=new.id,
+        host=host,
+        workspace=workspace,
+        key=new.key,
+        aliases=combined_aliases if combined_aliases else None,
+    )
+
+
+@ensure_host_is_valid
+def add_alias(*, host: str | None = None, workspace: str, alias: str) -> None:
+    """
+    Associate an alias with an existing API key.
+
+    Parameters
+    ----------
+    host : str or None, default=None
+        Hub backend URI. If omitted, ``SKORE_HUB_URI`` is used.
+    workspace : str
+        Workspace associated with the API key.
+    alias : str
+        Alternative URI to associate with the key.
+    """
+    assert host is not None
+    registry.local.add_alias(host=host, workspace=workspace, alias=alias)
 
 
 @ensure_host_is_valid

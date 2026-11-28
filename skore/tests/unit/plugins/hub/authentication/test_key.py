@@ -48,6 +48,28 @@ def test_generate_stores_key(hub):
     assert list(key_module.keys()) == [(1, "https://a.example", "w1")]
 
 
+def test_generate_with_aliases(hub):
+    key_module.generate(
+        host="https://api.example",
+        workspace="w1",
+        aliases=["https://frontend.example"],
+    )
+
+    assert key_module.get(host="https://api.example", workspace="w1") == "k1"
+    assert key_module.get(host="https://frontend.example", workspace="w1") == "k1"
+
+
+def test_add_alias(hub):
+    key_module.generate(host="https://api.example", workspace="w1")
+    key_module.add_alias(
+        host="https://api.example",
+        workspace="w1",
+        alias="https://frontend.example",
+    )
+
+    assert key_module.get(host="https://frontend.example", workspace="w1") == "k1"
+
+
 def test_generate_normalizes_host(hub):
     key_module.generate(host="HTTPS://A.Example/", workspace="w1")
 

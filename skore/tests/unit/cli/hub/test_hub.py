@@ -163,6 +163,37 @@ def test_hub_api_key_generate_delegates_to_skore(monkeypatch):
     assert "team" in result.output
 
 
+def test_hub_api_key_generate_aliases_discovered_frontend_url(monkeypatch):
+    calls = _patch_generate(monkeypatch)
+    monkeypatch.setattr(
+        "skore._cli.skore._discover_api_url", lambda url: "http://api.test"
+    )
+
+    result = _invoke(
+        [
+            "hub",
+            "api-key",
+            "generate",
+            "--host=http://frontend.test",
+            "--workspace=team",
+            "--login-timeout=42",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "host": "http://api.test",
+            "workspace": "team",
+            "name": None,
+            "expires": "never",
+            "timeout": 42,
+            "force": False,
+            "aliases": ["http://frontend.test"],
+        }
+    ]
+
+
 def test_hub_api_key_generate_errors_when_key_already_stored():
     local.set(id=9, host="http://hub.test", workspace="team", key="old-secret")
 
